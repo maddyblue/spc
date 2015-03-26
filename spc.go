@@ -11,28 +11,66 @@ import (
 	"github.com/mjibson/nsf/cpu6502"
 )
 
-type ram struct {
-	M [0xffff + 1]byte
-	A apu
-}
-
-func (r *ram) Read(v uint16) byte {
+func (s *SPC) Read(v uint16) byte {
 	switch v {
-	//case 0x4015:
-	//	return r.A.Read(v)
+	case 0xf0:
+	case 0xf1:
+	case 0xf2:
+		return s.DSPAddr
+	case 0xf3:
+		return s.DSP[s.DSPAddr]
+	case 0xf4:
+	case 0xf5:
+	case 0xf6:
+	case 0xf7:
+	// regular memory
+	//case 0xf8:
+	//case 0xf9:
+	case 0xfa:
+	case 0xfb:
+	case 0xfc:
+	case 0xfd:
+		return s.Timer[0].Read()
+	case 0xfe:
+		return s.Timer[1].Read()
+	case 0xff:
+		return s.Timer[2].Read()
 	default:
-		return r.M[v]
+		return s.RAM[v]
 	}
+	return 0
 }
 
-func (r *ram) Write(v uint16, b byte) {
-	r.M[v] = b
-	if v&0xf000 == 0x4000 {
-		//	r.A.Write(v, b)
+func (s *SPC) Write(v uint16, b byte) {
+	switch v {
+	case 0xf0:
+	case 0xf1:
+		s.Timer[0].Enable(b&1 == 1)
+		s.Timer[1].Enable(b&2 == 1)
+		s.Timer[2].Enable(b&4 == 1)
+	case 0xf2:
+		s.DSPAddr = b
+	case 0xf3:
+		s.DSP[s.DSPAddr] = b
+	case 0xf4:
+	case 0xf5:
+	case 0xf6:
+	case 0xf7:
+	// regular memory
+	//case 0xf8:
+	//case 0xf9:
+	case 0xfa:
+		s.Timer[0].Set(b)
+	case 0xfb:
+		s.Timer[1].Set(b)
+	case 0xfc:
+		s.Timer[2].Set(b)
+	case 0xfd:
+	case 0xfe:
+	case 0xff:
+	default:
+		s.RAM[v] = b
 	}
-}
-
-type apu struct {
 }
 
 type SPC struct {
@@ -46,17 +84,89 @@ type SPC struct {
 	FadeDuration time.Duration
 	Artist       string
 
-	RAM *ram
+	RAM [0xffff + 1]byte
 	CPU *cpu6502.Cpu
+	DSP [128]byte
+
+	// Registers
+
+	DSPAddr byte
+	Timer   [3]*Timer
+}
+
+func (s *SPC) Sample() (l, r float32) {
+	for i:= 0; i < 8; i++ {
+		sr, sl := s.SampleVoice(i)
+		l += sl
+		r += sr
+	}
+	return
+}
+
+func (s *SPC) SampleVoice(n int) (l, r float32) {
+	d := s.DSP[16 * n:16*(n+1)]
+	vl := int8(d[0])
+	vr := int8(d[1])
+	pl := d[2]
+	ph := d[3] & 0x3f
+
+
+	var p float32 = float32(pl) + float32(uint16(ph) << 8)
+	hz := 32000 * p / (1<<12)
+	return float32(vl) * hz, float32(vr) * hz
+}
+
+type Timer struct {
+	Enabled bool
+	Counter byte
+	Ticker  byte
+	Upto    byte
+	Freq    int
+}
+
+func NewTimer(freq int) *Timer {
+	return &Timer{
+		Freq: freq,
+	}
+}
+
+func (t *Timer) Read() byte {
+	c := t.Counter
+	t.Counter = 0
+	return c
+}
+
+func (t *Timer) Set(b byte) {
+	t.Upto = b
+}
+
+func (t *Timer) Enable(e bool) {
+	t.Enabled = e
+	if e {
+		t.Ticker = 0
+		t.Counter = 0
+	}
+}
+
+func (t *Timer) Tick() {
+	if !t.Enabled {
+		return
+	}
+	t.Ticker++
+	if t.Ticker == t.Upto {
+		t.Ticker = 0
+		t.Counter = (t.Counter + 1) & 0xf
+	}
 }
 
 var ErrFormat = fmt.Errorf("spc: bad format")
 
 func New(r io.Reader) (*SPC, error) {
 	var err error
-	s := SPC{
-		RAM: new(ram),
-	}
+	s := SPC{}
+	s.Timer[0] = NewTimer(8000)
+	s.Timer[1] = NewTimer(8000)
+	s.Timer[2] = NewTimer(64000)
 	b, err := ioutil.ReadAll(r)
 	if err != nil {
 		return nil, err
@@ -76,7 +186,7 @@ func New(r io.Reader) (*SPC, error) {
 	if b[0x24] != 30 {
 		return nil, ErrFormat
 	}
-	s.CPU = cpu6502.New(s.RAM)
+	s.CPU = cpu6502.New(&s)
 	s.CPU.PC = uint16(b[0x26])
 	s.CPU.PC += uint16(b[0x25]) << 8
 	s.CPU.A = b[0x27]
@@ -100,14 +210,13 @@ func New(r io.Reader) (*SPC, error) {
 	}
 	s.FadeDuration = time.Millisecond * time.Duration(i)
 	s.Artist = clean(b[0xb1 : 0xb1+32])
-	if n := copy(s.RAM.M[:], b[0x100:0x100+65536]); n != 65536 {
+	if n := copy(s.RAM[:], b[0x100:0x100+65536]); n != 65536 {
 		return nil, ErrFormat
 	}
 	dsp := b[0x10100 : 0x10100+128]
 	_ = dsp
 
 	//s.CPU.T = &s
-	//s.ram.A.Init()
 	//s.CPU.Run()
 	return &s, nil
 }
