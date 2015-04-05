@@ -11,68 +11,6 @@ import (
 	"github.com/mjibson/nsf/cpu6502"
 )
 
-func (s *SPC) Read(v uint16) byte {
-	switch v {
-	case 0xf0:
-	case 0xf1:
-	case 0xf2:
-		return s.DSPAddr
-	case 0xf3:
-		return s.DSP[s.DSPAddr]
-	case 0xf4:
-	case 0xf5:
-	case 0xf6:
-	case 0xf7:
-	// regular memory
-	//case 0xf8:
-	//case 0xf9:
-	case 0xfa:
-	case 0xfb:
-	case 0xfc:
-	case 0xfd:
-		return s.Timer[0].Read()
-	case 0xfe:
-		return s.Timer[1].Read()
-	case 0xff:
-		return s.Timer[2].Read()
-	default:
-		return s.RAM[v]
-	}
-	return 0
-}
-
-func (s *SPC) Write(v uint16, b byte) {
-	switch v {
-	case 0xf0:
-	case 0xf1:
-		s.Timer[0].Enable(b&1 == 1)
-		s.Timer[1].Enable(b&2 == 1)
-		s.Timer[2].Enable(b&4 == 1)
-	case 0xf2:
-		s.DSPAddr = b
-	case 0xf3:
-		s.DSP[s.DSPAddr] = b
-	case 0xf4:
-	case 0xf5:
-	case 0xf6:
-	case 0xf7:
-	// regular memory
-	//case 0xf8:
-	//case 0xf9:
-	case 0xfa:
-		s.Timer[0].Set(b)
-	case 0xfb:
-		s.Timer[1].Set(b)
-	case 0xfc:
-		s.Timer[2].Set(b)
-	case 0xfd:
-	case 0xfe:
-	case 0xff:
-	default:
-		s.RAM[v] = b
-	}
-}
-
 type SPC struct {
 	ContainsID   bool
 	Song         string
@@ -92,71 +30,19 @@ type SPC struct {
 
 	DSPAddr byte
 	Timer   [3]*Timer
+	
+	//
+	
+	phase int
+	every_other_sample bool
+	new_kon, kon byte
+	t_koff byte
+	counters [4]int
+	counter_select [32]byte
 }
 
-func (s *SPC) Sample() (l, r float32) {
-	for i:= 0; i < 8; i++ {
-		sr, sl := s.SampleVoice(i)
-		l += sl
-		r += sr
-	}
-	return
-}
-
-func (s *SPC) SampleVoice(n int) (l, r float32) {
-	d := s.DSP[16 * n:16*(n+1)]
-	vl := int8(d[0])
-	vr := int8(d[1])
-	pl := d[2]
-	ph := d[3] & 0x3f
-
-
-	var p float32 = float32(pl) + float32(uint16(ph) << 8)
-	hz := 32000 * p / (1<<12)
-	return float32(vl) * hz, float32(vr) * hz
-}
-
-type Timer struct {
-	Enabled bool
-	Counter byte
-	Ticker  byte
-	Upto    byte
-	Freq    int
-}
-
-func NewTimer(freq int) *Timer {
-	return &Timer{
-		Freq: freq,
-	}
-}
-
-func (t *Timer) Read() byte {
-	c := t.Counter
-	t.Counter = 0
-	return c
-}
-
-func (t *Timer) Set(b byte) {
-	t.Upto = b
-}
-
-func (t *Timer) Enable(e bool) {
-	t.Enabled = e
-	if e {
-		t.Ticker = 0
-		t.Counter = 0
-	}
-}
-
-func (t *Timer) Tick() {
-	if !t.Enabled {
-		return
-	}
-	t.Ticker++
-	if t.Ticker == t.Upto {
-		t.Ticker = 0
-		t.Counter = (t.Counter + 1) & 0xf
-	}
+func (s *SPC) dir() byte {
+	return s.RAM[
 }
 
 var ErrFormat = fmt.Errorf("spc: bad format")
@@ -226,4 +112,64 @@ func clean(b []byte) string {
 	return strings.Split(s, "\x00")[0]
 }
 
-func (s *SPC) Init() {}
+func (s *SPC) Read(v uint16) byte {
+	switch v {
+	case 0xf0:
+	case 0xf1:
+	case 0xf2:
+		return s.DSPAddr
+	case 0xf3:
+		return s.DSP[s.DSPAddr]
+	case 0xf4:
+	case 0xf5:
+	case 0xf6:
+	case 0xf7:
+	// regular memory
+	//case 0xf8:
+	//case 0xf9:
+	case 0xfa:
+	case 0xfb:
+	case 0xfc:
+	case 0xfd:
+		return s.Timer[0].Read()
+	case 0xfe:
+		return s.Timer[1].Read()
+	case 0xff:
+		return s.Timer[2].Read()
+	default:
+		return s.RAM[v]
+	}
+	return 0
+}
+
+func (s *SPC) Write(v uint16, b byte) {
+	switch v {
+	case 0xf0:
+	case 0xf1:
+		s.Timer[0].Enable(b&1 == 1)
+		s.Timer[1].Enable(b&2 == 1)
+		s.Timer[2].Enable(b&4 == 1)
+	case 0xf2:
+		s.DSPAddr = b
+	case 0xf3:
+		s.DSP[s.DSPAddr] = b
+	case 0xf4:
+	case 0xf5:
+	case 0xf6:
+	case 0xf7:
+	// regular memory
+	//case 0xf8:
+	//case 0xf9:
+	case 0xfa:
+		s.Timer[0].Set(b)
+	case 0xfb:
+		s.Timer[1].Set(b)
+	case 0xfc:
+		s.Timer[2].Set(b)
+	case 0xfd:
+	case 0xfe:
+	case 0xff:
+	default:
+		s.RAM[v] = b
+	}
+}
