@@ -33,12 +33,38 @@ type SPC struct {
 	
 	//
 	
+	// todo: maybe use int32 instead of int because of c's int size?
+	// be sure to check all uses of int
+	
 	phase int
 	every_other_sample bool
 	new_kon, kon byte
 	t_koff byte
-	counters [4]int
-	counter_select [32]byte
+	counters [4]uint16
+	counter_select [32]*uint16
+	noise int
+	voices [voice_count]*voice_t
+	regs [register_count]uint8
+}
+
+const (
+	voice_count = 8
+	register_count = 128
+	brr_buf_size = 12
+)
+
+type voice_t struct {
+		 buf [brr_buf_size*2]int;// decoded samples (twice the size to simplify wrap handling)
+		 buf_pos []int;           // place in buffer where next samples will be decoded
+		 interp_pos int;         // relative fractional position in sample (0x1000 = 1.0)
+		 brr_addr int;           // address of current BRR block
+		 brr_offset int;         // current decoding offset in BRR block
+		 kon_delay int;          // KON delay/current setup phase
+		env_mode env_mode_t;
+		 env int;                // current envelope level
+		 hidden_env int;         // used by GAIN mode 7, very obscure quirk
+		 volume [2]int;         // copy of volume from DSP registers, with surround disabled
+		 enabled int;            // -1 if enabled, 0 if muted
 }
 
 func (s *SPC) dir() byte {
