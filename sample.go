@@ -1,12 +1,18 @@
 package spc
 
 func (s *SPC) Run(clock_count int) {
-	var v_regs []byte
+	var v_regs, dir []byte
 	REG := func(addr uint16) byte {
 		return s.RAM[addr]
 	}
 	VREG := func(addr uint16) byte {
 		return v_regs[addr]
+	}
+	GET_LE16A := func(v *uint16) uint16 {
+		return *v << 8 + *v>> 8
+	}
+	SAMPLE_PTR := func(i int) byte {
+		return GET_LE16A(dir[VREG(srcn) * 4 + i * 2])
 	}
 
 	var new_phase int = s.phase + clock_count;
@@ -16,7 +22,7 @@ func (s *SPC) Run(clock_count int) {
 		return
 	}
 	
-	dir := &s.RAM[REG(DIR) * 0x100]
+	dir = s.RAM[REG(DIR) * 0x100:]
 	  slow_gaussian := (REG(PMON) >> 1) | REG(NON);
 	  noise_rate  := REG(FLG) & 0x1F;
 	
@@ -32,7 +38,7 @@ func (s *SPC) Run(clock_count int) {
 		// KON/KOFF reading
 		s.every_other_sample = !s.every_other_sample
 		if  s.every_other_sample 	{
-			s.new_kon &= ~s.kon;
+			s.new_kon &= ^s.kon;
 			s.kon    = s.new_kon;
 			s.t_koff = REG(KOFF); 
 		}
@@ -57,8 +63,6 @@ func (s *SPC) Run(clock_count int) {
 		v_regs = s.regs[:];
 		var vbit int = 1;
 		for	{
-			#define SAMPLE_PTR(i) GET_LE16A( &dir [VREG(srcn) * 4 + i * 2] )
-			
 			var brr_header int = ram [v.brr_addr];
 			var kon_delay int = v.kon_delay;
 			
@@ -69,7 +73,7 @@ func (s *SPC) Run(clock_count int) {
 			}
 			
 			// KON phases
-			--kon_delay
+			kon_delay--
 			if  kon_delay >= 0 	{
 				v.kon_delay = kon_delay;
 				
@@ -86,7 +90,11 @@ func (s *SPC) Run(clock_count int) {
 				v.hidden_env = 0;
 				
 				// Disable BRR decoding until last three samples
-				v.interp_pos = (kon_delay & 3 ? 0x4000 : 0);
+				if kon_delay & 3 {
+					v.interp_pos = 0x4000
+				} else {
+					v.interp_pos = 0
+				}
 				
 				// Pitch is never added during KON
 				pitch = 0;
@@ -125,13 +133,13 @@ func (s *SPC) Run(clock_count int) {
 							output  = (fwd [0] * in [0]) >> 11;
 							output += (fwd [1] * in [1]) >> 11;
 							output += (rev [1] * in [2]) >> 11;
-							output = (int16_t) output;
+							output = int(int16(output))
 							output += (rev [0] * in [3]) >> 11;
 							
 							output = CLAMP16( output );
-							output &= ~1;
+							output &= ^1;
 						}
-						output = (output * env) >> 11 & ~1;
+						output = (output * env) >> 11 & ^1;
 					}
 					
 					// Output
@@ -159,14 +167,15 @@ func (s *SPC) Run(clock_count int) {
 			
 			if  s.every_other_sample	{
 				// KOFF
-				if  s.t_koff & vbit 
+				if  s.t_koff & vbit {
 					v.env_mode = env_release;
+				}
 				
 				// KON
 				if  s.kon & vbit 	{
 					v.kon_delay = 5;
 					v.env_mode  = env_attack;
-					REG(ENDX) &= ~vbit;
+					REG(ENDX) &= ^vbit;
 				}
 			}
 			
@@ -183,28 +192,35 @@ func (s *SPC) Run(clock_count int) {
 				// 3%
 				}	else 	{
 					var rate int;
-					var const int adsr0 = VREG(adsr0);
+					var adsr0 int = VREG(adsr0);
 					var env_data int = VREG(adsr1);
 					// 97% ADSR
-					if  adsr0 >= 0x80  	{
-						if  v.env_mode > env_decay  // 89%	{
+					if  adsr0 >= 0x80  	{ 
+						// 89%
+						if  v.env_mode > env_decay 	{
 							env--;
 							env -= env >> 8;
 							rate = env_data & 0x1F;
 							
 							// optimized handling
 							v.hidden_env = env;
-							if  READ_COUNTER( rate ) 
+							if  READ_COUNTER( rate )  {
 								goto exit_env;
+							}
 							v.env = env;
 							goto exit_env;
 						}	else if  v.env_mode == env_decay 	{
 							env--;
 							env -= env >> 8;
 							rate = (adsr0 >> 3 & 0x0E) + 0x10;
-						}	else // env_attack	{
+						// env_attack
+						}	else 	{
 							rate = (adsr0 & 0x0F) * 2 + 1;
-							env += rate < 31 ? 0x20 : 0x400;
+							if rate < 31 {
+								env += 0x20
+							} else {
+								env += 0x400;
+							}
 						}
 					// GAIN
 					}	else 	{
@@ -212,25 +228,25 @@ func (s *SPC) Run(clock_count int) {
 						var mode int;
 						env_data = VREG(gain);
 						mode = env_data >> 5;
-						if  mode < 4  // direct	{
+						// direct
+						if  mode < 4  	{
 							env = env_data * 0x10;
 							rate = 31;
 						}	else	{
 							rate = env_data & 0x1F;
-							if  mode == 4  // 4: linear decrease
-							{
+							// 4: linear decrease
+							if  mode == 4  {
 								env -= 0x20;
-							}
-							else if  mode < 6  // 5: exponential decrease
-							{
+							// 5: exponential decrease
+							} else if  mode < 6  	{
 								env--;
 								env -= env >> 8;
-							}
-							else // 6,7: linear increase
-							{
+							// 6,7: linear increase
+							} else {
 								env += 0x20;
-								if  mode > 6 && (unsigned) v.hidden_env >= 0x600 
+								if mode > 6 && v.hidden_env >= 0x600 {
 									env += 0x8 - 0x20; // 7: two-slope linear increase
+								}
 							}
 						}
 					}
@@ -243,10 +259,15 @@ func (s *SPC) Run(clock_count int) {
 					v.hidden_env = env;
 					
 					// unsigned cast because linear decrease going negative also triggers this
-					if  (unsigned) env > 0x7FF 	{
-						env = (env < 0 ? 0 : 0x7FF);
-						if  v.env_mode == env_attack 
+					if  env > 0x7FF 	{
+						if env < 0 {
+							env = 0
+						} else {
+							env = 0x7ff
+						}
+						if  v.env_mode == env_attack {
 							v.env_mode = env_decay;
+						}
 					}
 					
 					if  !READ_COUNTER( rate ) {
@@ -272,9 +293,10 @@ func (s *SPC) Run(clock_count int) {
 							ram [(v.brr_addr + v.brr_offset + 1) & 0xFFFF];
 					
 					// Advance read position
-					var const int brr_block_size = 9;
+					var   brr_block_size int = 9;
 					var brr_offset int = v.brr_offset;
-					if  (brr_offset += 2) >= brr_block_size 	{
+					brr_offset += 2
+					if  brr_offset >= brr_block_size 	{
 						// Next BRR block
 						var brr_addr int = (v.brr_addr + brr_block_size) & 0xFFFF;
 						assert( brr_offset == brr_block_size );
@@ -300,9 +322,9 @@ func (s *SPC) Run(clock_count int) {
 					pos := v.buf_pos[:]
 					
 					// Decode four samples
-					for ( end := 0; end < 4; pos, nybbles = pos[1:], nybbles << 4 )	{
+					for  end := 0; end < 4; pos, nybbles = pos[1:], nybbles << 4 {
 						// Extract upper nybble and scale appropriately
-						var s int = ((int16_t) nybbles >> right_shift) << left_shift;
+						var s int = ((nybbles & 0xffff) >> right_shift) << left_shift;
 						
 						// Apply IIR filter (8 is the most commonly used)
 						 filter := brr_header & 0x0C;
@@ -329,7 +351,8 @@ func (s *SPC) Run(clock_count int) {
 						// Adjust and write sample
 						s = CLAMP16( s );
 						s = (int16_t) (s * 2);
-						pos [brr_buf_size] = pos [0] = s; // second copy simplifies wrap-around
+						pos[0] = s
+						pos [brr_buf_size] =  s; // second copy simplifies wrap-around
 					}
 					
 					if  pos >= &v.buf [brr_buf_size] {
@@ -350,12 +373,14 @@ skip_brr:
 		
 		// Echo position
 		var echo_offset int = s.echo_offset;
-		uint8_t* const echo_ptr = &ram [(REG(ESA) * 0x100 + echo_offset) & 0xFFFF];
+		echo_ptr := ram [(REG(ESA) * 0x100 + echo_offset) & 0xFFFF:];
 		if  !echo_offset {
-			s.echo_length = (REG(EDL) & 0x0F) * 0x800;}
+			s.echo_length = (REG(EDL) & 0x0F) * 0x800;
+		}
 		echo_offset += 4;
 		if  echo_offset >= s.echo_length {
-			echo_offset = 0;}
+			echo_offset = 0
+		}
 		s.echo_offset = echo_offset;
 		
 		// FIR
