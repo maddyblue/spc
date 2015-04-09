@@ -24,18 +24,11 @@ const (
 	EFB = 0xd + 0x10*iota
 	_
 	PMON
-	NOV
+	NON
 	EOV
 	DIR
 	ESA
 	EDL
 
-	C0 = 0xf + 0x10*iota
-	C1
-	C2
-	C3
-	C4
-	C5
-	C6
-	C7
+	FIR = 0xf
 )

@@ -45,12 +45,15 @@ type SPC struct {
 	noise int
 	voices [voice_count]*voice_t
 	regs [register_count]uint8
+	echo_hist [echo_hist_size*2][2]int
+	echo_hist_pos [][2]int
 }
 
 const (
 	voice_count = 8
 	register_count = 128
 	brr_buf_size = 12
+	echo_hist_size = 8
 )
 
 type voice_t struct {
@@ -67,9 +70,14 @@ type voice_t struct {
 		 enabled int;            // -1 if enabled, 0 if muted
 }
 
-func (s *SPC) dir() byte {
-	return s.RAM[
-}
+type env_mode_t int
+
+const (
+	env_release env_mode_t = iota
+	env_attack
+	env_delay
+	env_sustain
+)
 
 var ErrFormat = fmt.Errorf("spc: bad format")
 

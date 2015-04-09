@@ -8,11 +8,11 @@ func (s *SPC) Run(clock_count int) {
 	VREG := func(addr uint16) byte {
 		return v_regs[addr]
 	}
-	GET_LE16A := func(v *uint16) uint16 {
-		return *v << 8 + *v>> 8
+	GET_LE16A := func(v []byte) uint16 {
+		return uint16(v[0]) << 8 + uint16(v[1])
 	}
-	SAMPLE_PTR := func(i int) byte {
-		return GET_LE16A(dir[VREG(srcn) * 4 + i * 2])
+	SAMPLE_PTR := func(i int) uint16 {
+		return GET_LE16A(dir[int(VREG(v_srcn)) * 4 + i * 2:])
 	}
 
 	var new_phase int = s.phase + clock_count;
@@ -22,7 +22,7 @@ func (s *SPC) Run(clock_count int) {
 		return
 	}
 	
-	dir = s.RAM[REG(DIR) * 0x100:]
+	dir = s.RAM[uint16(REG(DIR)) * 0x100:]
 	  slow_gaussian := (REG(PMON) >> 1) | REG(NON);
 	  noise_rate  := REG(FLG) & 0x1F;
 	
@@ -387,45 +387,41 @@ skip_brr:
 		var echo_in_l int = GET_LE16SA( echo_ptr + 0 );
 		var echo_in_r int = GET_LE16SA( echo_ptr + 2 );
 		
-		
-		int (*echo_hist_pos) [2] = s.echo_hist_pos;
-		if  ++echo_hist_pos >= &s.echo_hist [echo_hist_size] {
-			echo_hist_pos = s.echo_hist;
+		echo_hist_pos := s.echo_hist_pos
+		if len(echo_hist_pos) <= 1 {
+			echo_hist_pos = s.echo_hist[:]
+		} else {
+			echo_hist_pos = echo_hist_pos[1:]
 		}
 		s.echo_hist_pos = echo_hist_pos;
+		echo_hist_pos [8] [0] = echo_in_l;
+		echo_hist_pos [0] [0] = 	echo_hist_pos [8] [0] 
+		echo_hist_pos [8] [1] = echo_in_r;
+		echo_hist_pos [0] [1] = echo_hist_pos [8] [1] 
 		
-		echo_hist_pos [0] [0] = echo_hist_pos [8] [0] = echo_in_l;
-		echo_hist_pos [0] [1] = echo_hist_pos [8] [1] = echo_in_r;
-		
-		#define CALC_FIR_( i, in )  ((in) * (int8_t) REG(fir + i * 0x10))
-		echo_in_l = CALC_FIR_( 7, echo_in_l );
-		echo_in_r = CALC_FIR_( 7, echo_in_r );
-		
-		#define CALC_FIR( i, ch )   CALC_FIR_( i, echo_hist_pos [i + 1] [ch] )
-		#define DO_FIR( i )\
-			echo_in_l += CALC_FIR( i, 0 );\
+		CALC_FIR_ := func(i, in int) int {
+			return in * int(REG(FIR + i * 0x10))
+		}
+		CALC_FIR := func(i, ch int) int {
+			return CALC_FIR_(i, echo_hist_pos[i+1][ch])
+		}
+		for i := 0; i < 7; i++ {
+			echo_in_l += CALC_FIR( i, 0 );
 			echo_in_r += CALC_FIR( i, 1 );
-		DO_FIR( 0 );
-		DO_FIR( 1 );
-		DO_FIR( 2 );
-		#if defined (__MWERKS__) && __MWERKS__ < 0x3200
-			__eieio(); // keeps compiler from stupidly "caching" things in memory
-		#endif
-		DO_FIR( 3 );
-		DO_FIR( 4 );
-		DO_FIR( 5 );
-		DO_FIR( 6 );
+		}
 		
 		// Echo out
-		if  !(REG(FLG) & 0x20) {
-			var l int = (echo_out_l >> 7) + ((echo_in_l * (int8_t) REG(EFB)) >> 14);
-			var r int = (echo_out_r >> 7) + ((echo_in_r * (int8_t) REG(EFB)) >> 14);
+		if  (REG(FLG) & 0x20) == 0 {
+			var l int = (echo_out_l >> 7) + ((echo_in_l * int(REG(EFB))) >> 14);
+			var r int = (echo_out_r >> 7) + ((echo_in_r * int(REG(EFB))) >> 14);
 			
+			/*
 			// just to help pass more validation tests
 			#if SPC_MORE_ACCURACY
 				l &= ~1;
 				r &= ~1;
 			#endif
+			*/
 			
 			l = CLAMP16( l );
 			r = CLAMP16( r );
@@ -435,8 +431,8 @@ skip_brr:
 		}
 		
 		// Sound out
-		var l int = (main_out_l * mvoll + echo_in_l * (int8_t) REG(EVOLL)) >> 14;
-		var r int = (main_out_r * mvolr + echo_in_r * (int8_t) REG(EVOLR)) >> 14;
+		var l int = (main_out_l * mvoll + echo_in_l * int(REG(EVOLL))) >> 14;
+		var r int = (main_out_r * mvolr + echo_in_r * int(REG(EVOLR))) >> 14;
 		
 		l = CLAMP16( l );
 		r = CLAMP16( r );
@@ -450,7 +446,7 @@ skip_brr:
 		WRITE_SAMPLES( l, r, out );
 		s.out = out;
 		
-		--count;
+		count--
 		if count == 0 {
 			break
 		}
@@ -472,7 +468,7 @@ func (s *SPC) READ_COUNTER(rate byte) bool {
 	return (*m.counter_select [rate] & s.counter_mask [rate]) != 0
 }
 
-var counter_mask [32]uint = {
+var counter_mask  = [32]uint{
 7 ,
 4095 ,
 4095 ,
@@ -518,7 +514,7 @@ func (s *SPC) init_counter() {
 	n := 2
 	for i := 1; i < 32; i++ {
 		s.counter_select [i] = &s.counters [n];
-		--n
+		n--
 		if n == 0 {
 			n = 3
 		}
@@ -529,7 +525,7 @@ func (s *SPC) init_counter() {
 
 // Interleved gauss table
 // interleved_gauss [i] = gauss [(i & 1) * 256 + 255 - (i >> 1 & 0xFF)]
-var interleved_gauss [512]uint16 = {
+var interleved_gauss=  [512]uint16 {
  370,1305, 366,1305, 362,1304, 358,1304, 354,1304, 351,1304, 347,1304, 343,1303,
  339,1303, 336,1303, 332,1302, 328,1302, 325,1301, 321,1300, 318,1300, 314,1299,
  311,1298, 307,1297, 304,1297, 300,1296, 297,1295, 293,1294, 290,1293, 286,1292,
@@ -589,7 +585,7 @@ const (
 )
 
 // 0: >>1  1: <<0  2: <<1 ... 12: <<11  13-15: >>4 <<11
-var shifts [16*2]int = {
+var shifts =[16*2]int  {
 						13,12,12,12,12,12,12,12,12,12,12, 12, 12, 16, 16, 16,
 						 0, 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 11, 11, 11,
 }
