@@ -46,7 +46,8 @@ type SPC struct {
 	filter *_Ctype_struct_SPC_Filter
 }
 
-// Play decodes the next samples into data.
+// Play decodes the next samples into data. Data is populated with two channels
+// interleaved.
 func (s *SPC) Play(data []int16) (err error) {
 	b := make([]C.short, len(data))
 	datablock := (*C.spc_sample_t)(unsafe.Pointer(&b[0]))
